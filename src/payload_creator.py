@@ -19,7 +19,7 @@ def validate_params(kwargs):
         'reset': bool,
         'tools_type': str
     }
-    tools_type_list = ['all', '4_close', '4_random', '8_close', '8_random']
+    tools_type_list = ['all', 'exact', '4_close', '4_random', '8_close', '8_random']
     for key, expected_type in expected_types.items():
         print(key, kwargs.get(key))
         if key in kwargs and not isinstance(kwargs[key], expected_type):

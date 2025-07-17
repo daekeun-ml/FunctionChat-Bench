@@ -15,6 +15,7 @@ DEFAULTS = {
     # gemini
     "gcloud_project_id": "user_gcloud_project_id",
     "gcloud_location": "user_gcloud_project_location",
+    "use_async": False,
 }
 
 
@@ -91,4 +92,16 @@ class DefaultApiKeyPromptOptions(click.Option):
         q = ctx.obj.get("q")
         if q:
             return DEFAULTS['api_key']
+        return super().prompt_for_value(ctx)
+
+
+class DefaultUseAsyncPromptOptions(click.Option):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('type', click.BOOL)
+        super(DefaultUseAsyncPromptOptions, self).__init__(*args, **kwargs)
+
+    def prompt_for_value(self, ctx):
+        q = ctx.obj.get("q")
+        if q:
+            return DEFAULTS['use_async']
         return super().prompt_for_value(ctx)

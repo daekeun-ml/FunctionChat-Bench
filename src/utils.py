@@ -1,10 +1,65 @@
 import os
 import json
 import pandas as pd
+import re
 from tqdm import tqdm
+from dotenv import load_dotenv
 """
 This is a package that collects commonly used basic utilities.
 """
+
+# .env 파일 로드
+load_dotenv()
+
+def get_env_var(key, default=None):
+    """
+    환경 변수를 가져옵니다. 환경 변수가 없는 경우 기본값을 반환합니다.
+    
+    Parameters:
+        key (str): 환경 변수 키
+        default: 환경 변수가 없는 경우 반환할 기본값
+        
+    Returns:
+        환경 변수 값 또는 기본값
+    """
+    return os.environ.get(key, default)
+
+
+def substitute_env_vars(text):
+    """
+    텍스트에서 ${VAR_NAME} 형태의 환경변수 플레이스홀더를 실제 환경변수 값으로 치환합니다.
+    
+    Parameters:
+        text (str): 치환할 텍스트
+        
+    Returns:
+        str: 환경변수가 치환된 텍스트
+    """
+    def replace_var(match):
+        var_name = match.group(1)
+        return os.environ.get(var_name, match.group(0))  # 환경변수가 없으면 원본 유지
+    
+    return re.sub(r'\$\{([^}]+)\}', replace_var, text)
+
+
+def load_config_with_env_vars(config_path):
+    """
+    설정 파일을 로드하고 환경변수를 치환합니다.
+    
+    Parameters:
+        config_path (str): 설정 파일 경로
+        
+    Returns:
+        dict: 환경변수가 치환된 설정 딕셔너리
+    """
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config_text = f.read()
+    
+    # 환경변수 치환
+    config_text = substitute_env_vars(config_text)
+    
+    # JSON 파싱
+    return json.loads(config_text)
 
 
 def is_exist_file(file_path):

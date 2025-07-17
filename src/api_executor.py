@@ -1,4 +1,5 @@
 import sys
+import os
 import json
 import openai
 
@@ -13,6 +14,10 @@ from src.gemini_utils import (
     convert_tools_gemini,
     convert_gemini_to_response,
     call_gemini_model
+)
+from src.bedrock_utils import (
+    create_bedrock_client,
+    call_bedrock_model
 )
 
 import qwen_agent
@@ -77,7 +82,8 @@ class OpenaiModelAzureAPI(AbstractModelAPIExecutor):
                 response = self.openai_chat_completion(
                     model=self.model,
                     temperature=api_request['temperature'],
-                    messages=api_request['messages']
+                    messages=api_request['messages'],
+                    tools=api_request.get('tools')
                 )
                 response = response.model_dump()
             except Exception as e:
@@ -85,6 +91,8 @@ class OpenaiModelAzureAPI(AbstractModelAPIExecutor):
                 try_cnt += 1
                 print(e)
                 print(json.dumps(api_request['messages'], ensure_ascii=False))
+                if try_cnt >= 3:  # 최대 3번 재시도
+                    raise
                 continue
             else:
                 break
@@ -430,13 +438,69 @@ class GeminiModelAPI(AbstractModelAPIExecutor):
         return response_output
 
 
+class BedrockModelAPI(AbstractModelAPIExecutor):
+    def __init__(self, model, api_key, aws_secret_key, aws_region, bedrock_model_id):
+        """
+        Bedrock 모델 API 실행기를 초기화합니다.
+
+        Parameters:
+        model (str): 모델 이름
+        api_key (str): AWS 액세스 키 ID
+        aws_secret_key (str): AWS 시크릿 액세스 키
+        aws_region (str): AWS 리전
+        bedrock_model_id (str): Bedrock 모델 ID
+        """
+        super().__init__(model, api_key)
+        self.aws_secret_key = aws_secret_key
+        self.aws_region = aws_region
+        self.bedrock_model_id = bedrock_model_id
+        self.client = create_bedrock_client(
+            region_name=aws_region,
+            aws_access_key_id=api_key,
+            aws_secret_access_key=aws_secret_key
+        )
+
+    def predict(self, api_request):
+        """
+        요청에 대한 모델 예측을 가져옵니다.
+
+        Parameters:
+        api_request (dict): 예측을 위한 API 요청 데이터
+        """
+        try_cnt = 0
+        response_output = None
+        
+        while True:
+            try:
+                response_output = call_bedrock_model(
+                    bedrock_client=self.client,
+                    model_id=self.bedrock_model_id,
+                    messages=api_request['messages'],
+                    tools=api_request.get('tools'),
+                    temperature=api_request['temperature']
+                )
+            except Exception as e:
+                print(f".. retry api call .. {try_cnt}")
+                try_cnt += 1
+                print(e)
+                print(json.dumps(api_request['messages'], ensure_ascii=False))
+                if try_cnt >= 3:  # 최대 3번 재시도
+                    raise
+                continue
+            else:
+                break
+                
+        return response_output
+
+
 class APIExecutorFactory:
     """
     A factory class to create model API executor instances based on the model name.
     """
 
     @staticmethod
-    def get_model_api(model_name, api_key=None, model_path=None, base_url=None, gcloud_project_id=None, gcloud_location=None):
+    def get_model_api(model_name, api_key=None, model_path=None, base_url=None, gcloud_project_id=None, gcloud_location=None, 
+                     aws_secret_key=None, aws_region=None, bedrock_model_id=None):
         """
         Creates and returns an API executor for a given model by identifying the type of model and initializing the appropriate API class.
 
@@ -447,6 +511,9 @@ class APIExecutorFactory:
             base_url (str, optional): The base URL of the API service for the model.
             gcloud_project_id (str, optional): The Google Cloud project ID, required for models hosted on Google Cloud.
             gcloud_location (str, optional): The location of the Google Cloud project, required for models hosted on Google Cloud.
+            aws_secret_key (str, optional): AWS 시크릿 액세스 키 (Bedrock 모델용)
+            aws_region (str, optional): AWS 리전 (Bedrock 모델용)
+            bedrock_model_id (str, optional): Bedrock 모델 ID
 
         Returns:
             An instance of an API executor for the specified model.
@@ -464,9 +531,17 @@ class APIExecutorFactory:
             return SolarModelAPI(model_name, api_key=api_key, base_url=base_url)
         elif model_name.lower().startswith('gpt'):  # OpenAI developed model
             return OpenaiModelAPI(model_name, api_key)
+        elif model_name.lower() == 'azure':  # Azure OpenAI model
+            # Azure OpenAI API 설정 가져오기
+            api_base = os.environ.get('AZURE_OPENAI_ENDPOINT')
+            api_version = os.environ.get('AZURE_OPENAI_API_VERSION')
+            azure_model = os.environ.get('AZURE_OPENAI_MODEL')
+            return OpenaiModelAzureAPI(azure_model, api_key, api_base, api_version)
         elif model_name.startswith('mistral'):  # Mistral developed model
             return MistralModelAPI(model_name, api_key)
         elif model_name.startswith('gemini'):  # Google developed model
             return GeminiModelAPI(model_name, gcloud_project_id=gcloud_project_id, gcloud_location=gcloud_location)
+        elif model_name.startswith('bedrock'):  # AWS Bedrock model
+            return BedrockModelAPI(model_name, api_key, aws_secret_key, aws_region, bedrock_model_id)
         else:
             raise ValueError("Unsupported model name")

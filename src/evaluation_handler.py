@@ -5,10 +5,11 @@ from tqdm import tqdm
 CUR_PATH = os.path.dirname(os.path.abspath(__file__))
 REPO_PATH = '/'.join(CUR_PATH.split('/')[:-1])
 
-from src import utils
+from src.utils import load_config_with_env_vars, is_exist_file, load_to_jsonl
 from src.api_executor import (
     OpenaiModelAzureAPI,
-    OpenaiModelAPI
+    OpenaiModelAPI,
+    BedrockModelAPI
 )
 from src.formatter import (
     CommonResponseFormatter,
@@ -39,12 +40,17 @@ class EvaluationHandler:
     A class to handle different types of evaluations for models.
     It manages the setup, execution, and storage of evaluation results based on evaluation metrics and configurations.
     """
-    def __init__(self, evaluation_type):
+    def __init__(self, evaluation_type, judge_type=None, judge_api_key=None, judge_aws_secret_key=None, judge_aws_region=None, judge_bedrock_model_id=None):
         """
         Initializes the EvaluationHandler with a specific type of evaluation.
 
         Parameters:
             evaluation_type (str): The type of evaluation to perform, which determines the evaluation logic and outputs.
+            judge_type (str): The type of judge model to use (openai, azure, bedrock)
+            judge_api_key (str): API key for judge model
+            judge_aws_secret_key (str): AWS secret key for judge model (bedrock only)
+            judge_aws_region (str): AWS region for judge model (bedrock only)
+            judge_bedrock_model_id (str): Bedrock model ID for judge model (bedrock only)
 
         Attributes:
             evaluation_type (str): Stores the type of evaluation.
@@ -56,9 +62,32 @@ class EvaluationHandler:
         self.evaluation_type = evaluation_type
         # load prompt
         self.rubric_prompts = self.get_rubric_prompts()
-        cfg = json.loads(open(f'{REPO_PATH}/config/openai.cfg', 'r').read())
+        
+        # judge_type 결정 (파라미터 > 환경변수 > 기본값)
+        if judge_type is None:
+            judge_type = os.environ.get('DEFAULT_JUDGE_TYPE', 'openai')
+        
+        # judge_type에 따라 적절한 cfg 파일 선택
+        cfg_file = f'{REPO_PATH}/config/judge_{judge_type}.cfg'
+        if not os.path.exists(cfg_file):
+            cfg_file = f'{REPO_PATH}/config/{judge_type}.cfg'
+        if not os.path.exists(cfg_file):
+            cfg_file = f'{REPO_PATH}/config/openai.cfg'
+            
+        cfg = load_config_with_env_vars(cfg_file)
+        
+        # 파라미터로 전달된 값이 있으면 cfg 값을 덮어씀
+        if judge_api_key:
+            cfg['api_key'] = judge_api_key
+        if judge_aws_secret_key:
+            cfg['aws_secret_key'] = judge_aws_secret_key
+        if judge_aws_region:
+            cfg['aws_region'] = judge_aws_region
+        if judge_bedrock_model_id:
+            cfg['bedrock_model_id'] = judge_bedrock_model_id
+            
         self.temperature = float(cfg.get('temperature'))
-        self.executor = self.load_api_executor(cfg)
+        self.executor = self.load_api_executor(cfg, judge_type)
         self.eval_reg = EVAlUATION_REGISTOR_OBJ[self.evaluation_type]()
 
     def get_rubric_prompts(self):
@@ -69,15 +98,27 @@ class EvaluationHandler:
                 rubric_prompts[output_type] = open(rubric_file_path, "r", encoding="utf-8").read().strip()
         return rubric_prompts
 
-    def load_api_executor(self, cfg):
+    def load_api_executor(self, cfg, judge_type=None):
         executor = None
-        # set evaluation-model (default : gpt-4 azure)
-        if cfg.get('api_type') == "azure":
+        if judge_type is None:
+            judge_type = cfg.get('api_type', 'openai')
+        
+        # set evaluation-model based on judge_type
+        if judge_type == "azure":
             executor = OpenaiModelAzureAPI(cfg.get('instance'), cfg.get('api_key'), cfg.get('api_base'), cfg.get('api_version'))
-        elif cfg.get('api_type') == "openai":
+        elif judge_type == "openai":
             executor = OpenaiModelAPI(cfg.get('api_version'), cfg.get('api_key'), use_eval=True)
+        elif judge_type == "bedrock":
+            # Bedrock 모델을 사용한 평가
+            executor = BedrockModelAPI(
+                model="bedrock",
+                api_key=cfg.get('api_key'),
+                aws_secret_key=cfg.get('aws_secret_key'),
+                aws_region=cfg.get('aws_region', 'us-west-2'),
+                bedrock_model_id=cfg.get('bedrock_model_id', 'anthropic.claude-3-sonnet-20240229-v1:0')
+            )
         else:
-            raise Exception("Unsupported evaluation api type")
+            raise Exception(f"Unsupported evaluation api type: {judge_type}")
         return executor
 
     def clean_tool_calls(self, tools):
@@ -242,8 +283,8 @@ class EvaluationHandler:
         return evaluate_response, input_prompt
 
     def load_cached_evaluation_result(self, eval_file_path, max_size):
-        if utils.is_exist_file(eval_file_path):
-            eval_output = utils.load_to_jsonl(eval_file_path)
+        if is_exist_file(eval_file_path):
+            eval_output = load_to_jsonl(eval_file_path)
             if len(eval_output) == max_size:
                 print(f"[[already evaluate]] .. {len(eval_output)}/{max_size}\npath : {eval_file_path}")
                 return eval_output
